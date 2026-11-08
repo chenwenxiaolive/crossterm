@@ -458,6 +458,34 @@ mod tests {
     }
 
     #[test]
+    fn queued_mouse_events_are_drained_without_new_writes() {
+        use crate::event::{KeyModifiers, MouseEvent, MouseEventKind};
+
+        let (mut source, mut writer) = source_with_input();
+        let mut input = b"\x1b[<65;40;20M".repeat(256);
+        input.push(b'x');
+        writer.write_all(&input).unwrap();
+
+        for index in 0..256 {
+            assert_eq!(
+                source.try_read(Some(Duration::ZERO)).unwrap(),
+                Some(InternalEvent::Event(Event::Mouse(MouseEvent {
+                    kind: MouseEventKind::ScrollDown,
+                    column: 39,
+                    row: 19,
+                    modifiers: KeyModifiers::NONE,
+                }))),
+                "missing scroll event {index}",
+            );
+        }
+        assert_eq!(
+            source.try_read(Some(Duration::ZERO)).unwrap(),
+            Some(InternalEvent::Event(Event::Key(KeyCode::Char('x').into())))
+        );
+        assert_eq!(source.try_read(Some(Duration::ZERO)).unwrap(), None);
+    }
+
+    #[test]
     fn externally_buffered_escape_remains_available_for_its_continuation() {
         let mut parser = Parser::default();
         parser.buffer_external_input(b"\x1b");
