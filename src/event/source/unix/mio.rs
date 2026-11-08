@@ -491,6 +491,31 @@ mod tests {
     }
 
     #[test]
+    fn externally_consumed_input_does_not_leave_stale_readiness() {
+        let (mut source, mut writer) = source_with_input();
+        writer.write_all(&vec![b'x'; super::TTY_BUFFER_SIZE + 1]).unwrap();
+        assert!(source.try_read(Some(Duration::ZERO)).unwrap().is_some());
+
+        let mut remaining = [0];
+        assert_eq!(source.tty_fd.read(&mut remaining).unwrap(), 1);
+        source.buffer_input(&remaining, &mut Default::default());
+
+        let (result_tx, result_rx) = std::sync::mpsc::channel();
+        let consumer = std::thread::spawn(move || {
+            result_tx
+                .send(source.try_read(Some(Duration::ZERO)).unwrap())
+                .unwrap();
+        });
+        let result = result_rx.recv_timeout(Duration::from_secs(1));
+        if result.is_err() {
+            // Release a blocking read so a regression fails instead of hanging the suite.
+            writer.write_all(b'y').unwrap();
+        }
+        consumer.join().unwrap();
+        assert_eq!(result.unwrap(), None);
+    }
+
+    #[test]
     fn externally_buffered_escape_remains_available_for_its_continuation() {
         let mut parser = Parser::default();
         parser.buffer_external_input(b"\x1b");
