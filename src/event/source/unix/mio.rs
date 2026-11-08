@@ -128,14 +128,19 @@ impl EventSource for UnixInternalEventSource {
                                 }
                             };
 
-                            if let Some(event) = self.parser.next() {
-                                return Ok(Some(event));
-                            }
-
                             // The source owns this descriptor for the lifetime of its borrow.
                             let fd =
                                 unsafe { rustix::fd::BorrowedFd::borrow_raw(self.tty_fd.raw_fd()) };
-                            if rustix::io::ioctl_fionread(fd)? == 0 {
+                            let has_pending_input = rustix::io::ioctl_fionread(fd)? != 0;
+
+                            if let Some(event) = self.parser.next() {
+                                // Mio is edge-triggered, so unread input may not produce another
+                                // readiness event after the parser's queued events are consumed.
+                                self.pending_tty_readable = has_pending_input;
+                                return Ok(Some(event));
+                            }
+
+                            if !has_pending_input {
                                 break;
                             }
                             if timeout.elapsed() {
