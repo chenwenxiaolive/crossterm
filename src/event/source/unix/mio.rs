@@ -72,6 +72,12 @@ impl UnixInternalEventSource {
             waker,
         })
     }
+
+    fn has_pending_input(&self) -> io::Result<bool> {
+        // The source owns this descriptor for the lifetime of its borrow.
+        let fd = unsafe { rustix::fd::BorrowedFd::borrow_raw(self.tty_fd.raw_fd()) };
+        Ok(rustix::io::ioctl_fionread(fd)? != 0)
+    }
 }
 
 impl EventSource for UnixInternalEventSource {
@@ -82,9 +88,10 @@ impl EventSource for UnixInternalEventSource {
         let timeout = PollTimeout::new(timeout);
 
         loop {
-            if self.pending_tty_readable {
-                self.pending_tty_readable = false;
-            } else {
+            // An external input handoff may have consumed the previously readable bytes.
+            let pending_tty_readable = self.pending_tty_readable && self.has_pending_input()?;
+            self.pending_tty_readable = false;
+            if !pending_tty_readable {
                 let poll_timeout = self.parser.poll_timeout(timeout.leftover());
                 if let Err(e) = self.poll.poll(&mut self.events, poll_timeout) {
                     // Mio will throw an interrupted error in case of cursor position retrieval. We need to retry until it succeeds.
@@ -128,10 +135,7 @@ impl EventSource for UnixInternalEventSource {
                                 }
                             };
 
-                            // The source owns this descriptor for the lifetime of its borrow.
-                            let fd =
-                                unsafe { rustix::fd::BorrowedFd::borrow_raw(self.tty_fd.raw_fd()) };
-                            let has_pending_input = rustix::io::ioctl_fionread(fd)? != 0;
+                            let has_pending_input = self.has_pending_input()?;
 
                             if let Some(event) = self.parser.next() {
                                 // Mio is edge-triggered, so unread input may not produce another
@@ -493,7 +497,9 @@ mod tests {
     #[test]
     fn externally_consumed_input_does_not_leave_stale_readiness() {
         let (mut source, mut writer) = source_with_input();
-        writer.write_all(&vec![b'x'; super::TTY_BUFFER_SIZE + 1]).unwrap();
+        writer
+            .write_all(&vec![b'x'; super::TTY_BUFFER_SIZE + 1])
+            .unwrap();
         assert!(source.try_read(Some(Duration::ZERO)).unwrap().is_some());
 
         let mut remaining = [0];
