@@ -515,7 +515,7 @@ mod tests {
         let result = result_rx.recv_timeout(Duration::from_secs(1));
         if result.is_err() {
             // Release a blocking read so a regression fails instead of hanging the suite.
-            writer.write_all(b'y').unwrap();
+            writer.write_all(b"y").unwrap();
         }
         consumer.join().unwrap();
         assert_eq!(result.unwrap(), None);
